@@ -142,7 +142,7 @@ Domain tests cover every wind, rain, and snow edge in the table, the load bounda
 ## Known limitations
 
 - Hosted URL: not deployed in this workspace. The Docker image is the intended Render, Railway, or Fly service. Say which host to use and provide `MAPBOX_TOKEN` if you want Mapbox instead of OSRM.
-- `typescript-eslint` does not support TypeScript 7, which the Vite template uses. The frontend lints with oxlint (the ESLint-compatible linter shipped with that template) and Prettier.
+- The frontend lints with oxlint and Prettier. `typescript-eslint` 8 only accepts TypeScript below 6.1, so it is not installed alongside TypeScript 7.
 - Public OSRM and Open-Meteo can rate-limit or be slow. A long trip still fits in one plan request.
 - Car durations, not truck durations. The proportional ETA can be replaced with per-leg durations without changing the risk or ranking code.
 - The screenshot above is Chicago to Milwaukee on a calm day, so the route is entirely Low and the provider returned one corridor.

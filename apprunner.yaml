@@ -18,3 +18,4 @@ run:
       value: "*"
     - name: CORS_ALLOWED_ORIGINS
       value: "https://weather-aware-nine.vercel.app,http://localhost:5173"
+

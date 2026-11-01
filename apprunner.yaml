@@ -1,0 +1,20 @@
+version: 1.0
+runtime: python311
+build:
+  commands:
+    build:
+      - pip install -r backend/requirements.txt
+run:
+  command: gunicorn --chdir backend config.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 120
+  network:
+    port: 8000
+    env: APP_PORT
+  env:
+    - name: PYTHONPATH
+      value: backend
+    - name: DJANGO_DEBUG
+      value: "0"
+    - name: DJANGO_ALLOWED_HOSTS
+      value: "*"
+    - name: CORS_ALLOWED_ORIGINS
+      value: "https://weather-aware-nine.vercel.app,http://localhost:5173"

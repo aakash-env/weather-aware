@@ -1,11 +1,45 @@
 import { encode } from "@mapbox/polyline";
 import { describe, expect, it } from "vitest";
 
+import { cumulativeMiles, sliceByMiles } from "./geo";
 import { levelColor } from "./colors";
 import { segmentBounds } from "./segments";
 import { riskSegments } from "./segments";
 import { localInputToIso } from "./time";
 import type { Checkpoint } from "../types";
+
+describe("sliceByMiles edge cases", () => {
+  it("handles empty and single coordinate inputs", () => {
+    expect(sliceByMiles([], [], 0, 10)).toEqual([]);
+    expect(sliceByMiles([[0, 0]], [0], 0, 10)).toHaveLength(2);
+  });
+
+  it("handles boundaries at mile 0, total mile, and out of range", () => {
+    const coords: [number, number][] = [
+      [-100, 40],
+      [-100, 41],
+      [-100, 42],
+    ];
+    const cum = cumulativeMiles(coords);
+    const total = cum[cum.length - 1];
+
+    // Mile 0 to 0
+    const zero = sliceByMiles(coords, cum, 0, 0);
+    expect(zero).toHaveLength(2);
+    expect(zero[0]).toEqual([-100, 40]);
+
+    // Mile 0 to total
+    const full = sliceByMiles(coords, cum, 0, total);
+    expect(full.length).toBeGreaterThanOrEqual(3);
+    expect(full[0]).toEqual([-100, 40]);
+    expect(full[full.length - 1]).toEqual([-100, 42]);
+
+    // Negative and out-of-range miles clamp gracefully
+    const clamped = sliceByMiles(coords, cum, -10, total + 100);
+    expect(clamped[0]).toEqual([-100, 40]);
+    expect(clamped[clamped.length - 1]).toEqual([-100, 42]);
+  });
+});
 
 describe("segment bounds", () => {
   it("covers the route from mile 0 to the end", () => {

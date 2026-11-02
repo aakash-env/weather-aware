@@ -11,7 +11,7 @@ from planner.providers.geocode_photon import PhotonGeocoder
 from planner.providers.routing import collect_up_to_three
 from planner.providers.routing_mapbox import MapboxRouting
 from planner.providers.routing_osrm import OsrmRouting
-from planner.providers.weather_openmeteo import OpenMeteoWeather, _parse_row
+from planner.providers.weather_openmeteo import BoundedLRUCache, OpenMeteoWeather, _parse_row
 
 
 def _line(lon: float) -> str:
@@ -214,3 +214,72 @@ def test_upstream_http_error_becomes_provider_error():
         assert "Invalid Token" in str(exc)
     else:
         raise AssertionError("expected ProviderError")
+
+
+def test_bounded_lru_cache_eviction_and_ttl():
+    import time
+
+    from planner.providers.base import HourlySeries
+
+    cache = BoundedLRUCache(maxsize=2, default_ttl=60)
+    series_a = HourlySeries(times=[], wind_mph=[], rain_in_hr=[], snow_in_hr=[])
+    series_b = HourlySeries(times=[], wind_mph=[], rain_in_hr=[], snow_in_hr=[])
+    series_c = HourlySeries(times=[], wind_mph=[], rain_in_hr=[], snow_in_hr=[])
+
+    cache.set("a", series_a)
+    cache.set("b", series_b)
+    assert len(cache) == 2
+    assert cache.get("a") is series_a
+
+    # Accessing 'a' makes 'b' least recently used
+    # Inserting 'c' should evict 'b'
+    cache.set("c", series_c)
+    assert len(cache) == 2
+    assert cache.get("b") is None
+    assert cache.get("a") is series_a
+    assert cache.get("c") is series_c
+
+    # Test TTL expiration with 0-second TTL
+    cache.set("expiring", series_a, ttl=0)
+    time.sleep(0.01)
+    assert cache.get("expiring") is None
+
+
+def test_singleflight_concurrent_weather_fetch():
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    calls = {"count": 0}
+
+    def slow_handler(request: httpx.Request) -> httpx.Response:
+        calls["count"] += 1
+        time.sleep(0.05)
+        return httpx.Response(
+            200,
+            json={
+                "hourly": {
+                    "time": ["2026-11-02T00:00"],
+                    "wind_speed_10m": [15.0],
+                    "rain": [0.0],
+                    "showers": [0.0],
+                    "snowfall": [0.0],
+                }
+            },
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(slow_handler))
+    weather = OpenMeteoWeather(client=client)
+    point = LatLon(41.8, -87.6)
+
+    def worker():
+        return weather.fetch([point], forecast_days=2)
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        futures = [pool.submit(worker) for _ in range(5)]
+        results = [f.result() for f in futures]
+
+    # Exactly 1 HTTP request should have been made despite 5 concurrent callers
+    assert calls["count"] == 1
+    for res in results:
+        assert (41.8, -87.6) in res
+        assert res[(41.8, -87.6)].wind_mph == [15.0]

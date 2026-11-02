@@ -8,7 +8,7 @@ function generateMockRoute(numPoints: number, numCheckpoints: number) {
   const startLat = 34.05;
   const startLon = -118.24;
   const endLat = 40.71;
-  const endLon = -74.00;
+  const endLon = -74.0;
 
   const points: [number, number][] = [];
   for (let i = 0; i < numPoints; i++) {
@@ -130,16 +130,24 @@ describe("Frontend Performance Baseline Benchmark", () => {
     const maxTickTimeMs = Math.max(...tickTimes);
 
     // 5. Memory footprint
-    const processObj = (globalThis as unknown as { process?: { memoryUsage?: () => { heapUsed: number } } }).process;
-    const heapUsedMb = processObj?.memoryUsage ? processObj.memoryUsage().heapUsed / (1024 * 1024) : 0;
+    const processObj = (
+      globalThis as unknown as { process?: { memoryUsage?: () => { heapUsed: number } } }
+    ).process;
+    const heapUsedMb = processObj?.memoryUsage
+      ? processObj.memoryUsage().heapUsed / (1024 * 1024)
+      : 0;
 
     console.log("==================================================================");
     console.log("FRONTEND PERFORMANCE BASELINE RESULTS (Cross-Country 12k vertices):");
     console.log("------------------------------------------------------------------");
     console.log(`- Polyline Decode (${decoded.length} pts):    ${decodeTimeMs.toFixed(3)} ms`);
     console.log(`- GeoJSON Segments (${segments.length} segs):  ${segmentsTimeMs.toFixed(3)} ms`);
-    console.log(`- Build 49 Heatmap Frames (${heatmapPoints.length} pts): ${buildFramesTimeMs.toFixed(3)} ms`);
-    console.log(`- Slider Tick (Avg Frame Time):       ${avgTickTimeMs.toFixed(4)} ms (< 16.6 ms target)`);
+    console.log(
+      `- Build 49 Heatmap Frames (${heatmapPoints.length} pts): ${buildFramesTimeMs.toFixed(3)} ms`,
+    );
+    console.log(
+      `- Slider Tick (Avg Frame Time):       ${avgTickTimeMs.toFixed(4)} ms (< 16.6 ms target)`,
+    );
     console.log(`- Slider Tick (Max Frame Time):       ${maxTickTimeMs.toFixed(4)} ms`);
     console.log(`- JS Heap Used:                       ${heapUsedMb.toFixed(2)} MB`);
     console.log("==================================================================");

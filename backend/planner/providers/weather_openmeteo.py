@@ -1,6 +1,9 @@
-"""Open-Meteo hourly forecasts. Coordinates are batched and fetched in parallel."""
+"""Open-Meteo hourly forecasts. Coordinates are batched, cached, and fetched in parallel."""
 
-from concurrent.futures import ThreadPoolExecutor
+import threading
+import time
+from collections import OrderedDict
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import UTC, datetime
 
 import httpx
@@ -14,22 +17,61 @@ MAX_WORKERS = 4
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 
 
+class BoundedLRUCache:
+    """Thread-safe LRU cache with TTL expiration and bounded capacity."""
+
+    def __init__(self, maxsize: int = 2048, default_ttl: int = 1800):
+        self._maxsize = maxsize
+        self._default_ttl = default_ttl
+        self._lock = threading.Lock()
+        self._data: OrderedDict[str, tuple[float, HourlySeries | None]] = OrderedDict()
+
+    def get(self, key: str) -> HourlySeries | None:
+        with self._lock:
+            if key not in self._data:
+                return None
+            expires_at, value = self._data[key]
+            if time.monotonic() > expires_at:
+                del self._data[key]
+                return None
+            self._data.move_to_end(key)
+            return value
+
+    def set(self, key: str, value: HourlySeries | None, ttl: int | None = None) -> None:
+        expires_at = time.monotonic() + (ttl if ttl is not None else self._default_ttl)
+        with self._lock:
+            if key in self._data:
+                del self._data[key]
+            elif len(self._data) >= self._maxsize:
+                self._data.popitem(last=False)
+            self._data[key] = (expires_at, value)
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._data)
+
+
 class OpenMeteoWeather:
     def __init__(
         self,
         client: httpx.Client | None = None,
         cache=None,
         ttl_seconds: int = 1800,
+        l1_cache: BoundedLRUCache | None = None,
     ):
         self._client = client
         self._cache = cache
+        self._l1 = l1_cache or BoundedLRUCache(maxsize=4096, default_ttl=ttl_seconds)
         self._ttl = ttl_seconds
+        self._inflight: dict[tuple[float, float, int], Future[HourlySeries | None]] = {}
+        self._inflight_lock = threading.Lock()
 
     def fetch(
         self,
         points: list[LatLon],
         forecast_days: int,
     ) -> dict[tuple[float, float], HourlySeries | None]:
+        # Spatial grid deduplication: 0.1 degree cell keys
         unique: list[LatLon] = []
         seen: set[tuple[float, float]] = set()
         for point in points:
@@ -40,23 +82,48 @@ class OpenMeteoWeather:
                 unique.append(rounded)
 
         found: dict[tuple[float, float], HourlySeries | None] = {}
-        missing: list[LatLon] = []
-        for point in unique:
-            cached = self._read_cache(point, forecast_days)
-            if cached is None and not self._cache_has(point, forecast_days):
-                missing.append(point)
-            else:
-                found[(point.lat, point.lon)] = cached
-        if not missing:
-            return found
+        to_fetch: list[LatLon] = []
+        waiting_futures: dict[tuple[float, float], Future[HourlySeries | None]] = {}
 
-        fetched = self._fetch_all(missing, forecast_days)
-        for point in missing:
-            key = (point.lat, point.lon)
-            series = fetched.get(key)
-            found[key] = series
-            if series is not None:
-                self._write_cache(point, forecast_days, series)
+        # Check cache and single-flight in-flight requests under lock
+        with self._inflight_lock:
+            for point in unique:
+                key = (point.lat, point.lon)
+                cached = self._read_cache(point, forecast_days)
+                if cached is not None or self._cache_has(point, forecast_days):
+                    found[key] = cached
+                else:
+                    flight_key = (point.lat, point.lon, forecast_days)
+                    if flight_key in self._inflight:
+                        waiting_futures[key] = self._inflight[flight_key]
+                    else:
+                        fut: Future[HourlySeries | None] = Future()
+                        self._inflight[flight_key] = fut
+                        waiting_futures[key] = fut
+                        to_fetch.append(point)
+
+        # Dispatch newly requested points
+        if to_fetch:
+            try:
+                fetched = self._fetch_all(to_fetch, forecast_days)
+            except Exception:
+                fetched = {}
+
+            for point in to_fetch:
+                key = (point.lat, point.lon)
+                series = fetched.get(key)
+                if series is not None:
+                    self._write_cache(point, forecast_days, series)
+                flight_key = (point.lat, point.lon, forecast_days)
+                with self._inflight_lock:
+                    fut = self._inflight.pop(flight_key, None)
+                if fut and not fut.done():
+                    fut.set_result(series)
+
+        # Await any in-flight futures (whether fetched by this call or a concurrent worker)
+        for key, fut in waiting_futures.items():
+            found[key] = fut.result()
+
         return found
 
     def _fetch_all(
@@ -112,19 +179,30 @@ class OpenMeteoWeather:
         return f"wx:v1:{point.lat:.1f}:{point.lon:.1f}:{forecast_days}"
 
     def _cache_has(self, point: LatLon, forecast_days: int) -> bool:
+        key = self._cache_key(point, forecast_days)
+        if self._l1.get(key) is not None:
+            return True
         if self._cache is None:
             return False
-        return self._cache.get(self._cache_key(point, forecast_days)) is not None
+        return self._cache.get(key) is not None
 
     def _read_cache(self, point: LatLon, forecast_days: int) -> HourlySeries | None:
+        key = self._cache_key(point, forecast_days)
+        l1_val = self._l1.get(key)
+        if l1_val is not None:
+            return l1_val
         if self._cache is None:
             return None
-        return self._cache.get(self._cache_key(point, forecast_days))
+        cached = self._cache.get(key)
+        if cached is not None:
+            self._l1.set(key, cached, self._ttl)
+        return cached
 
     def _write_cache(self, point: LatLon, forecast_days: int, series: HourlySeries) -> None:
-        if self._cache is None:
-            return
-        self._cache.set(self._cache_key(point, forecast_days), series, self._ttl)
+        key = self._cache_key(point, forecast_days)
+        self._l1.set(key, series, self._ttl)
+        if self._cache is not None:
+            self._cache.set(key, series, self._ttl)
 
 
 def _parse_row(row: dict) -> HourlySeries | None:

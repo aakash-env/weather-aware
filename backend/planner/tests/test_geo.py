@@ -27,11 +27,42 @@ def test_point_at_mile_interpolates_and_clamps():
     assert mid.lat == pytest.approx(40.5, abs=0.02)
 
 
+def test_point_at_mile_edge_cases():
+    single = [LatLon(40, -100)]
+    assert point_at_mile(single, [0.0], 0.0) == single[0]
+    assert point_at_mile(single, [0.0], 50.0) == single[0]
+    assert point_at_mile(single, [0.0], -5.0) == single[0]
+
+    with pytest.raises(ValueError, match="points must not be empty"):
+        point_at_mile([], [], 0.0)
+
+    points = [LatLon(40, -100), LatLon(41, -100), LatLon(42, -100)]
+    cum = cumulative_miles(points)
+    # Negative mile clamps to start
+    assert point_at_mile(points, cum, -10.0) == points[0]
+    # Mile exactly equal to total
+    assert point_at_mile(points, cum, cum[-1]) == points[-1]
+    # Mile past total clamps to end
+    assert point_at_mile(points, cum, cum[-1] + 100.0) == points[-1]
+
+
 def test_simplify_drops_collinear_points_and_keeps_a_bend():
     straight = [LatLon(40, -100), LatLon(40.01, -100), LatLon(40.02, -100), LatLon(40.03, -100)]
     assert simplify(straight, tolerance_m=150) == [straight[0], straight[-1]]
     bent = [LatLon(40, -100), LatLon(40.2, -100), LatLon(40.2, -99.5)]
     assert simplify(bent, tolerance_m=150) == bent
+
+
+def test_simplify_edge_cases():
+    assert simplify([]) == []
+    single = [LatLon(40, -100)]
+    assert simplify(single) == single
+    pair = [LatLon(40, -100), LatLon(41, -100)]
+    assert simplify(pair) == pair
+
+    # Duplicate points
+    duplicates = [LatLon(40, -100), LatLon(40, -100), LatLon(40, -100)]
+    assert simplify(duplicates) == [duplicates[0], duplicates[-1]]
 
 
 def test_polyline6_round_trip():

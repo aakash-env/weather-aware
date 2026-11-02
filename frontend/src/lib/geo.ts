@@ -29,11 +29,41 @@ export function sliceByMiles(
   if (coordinates.length === 0) return [];
   const start = pointAt(coordinates, cumulative, startMile);
   const end = pointAt(coordinates, cumulative, endMile);
-  const middle = coordinates.filter((_, index) => {
-    const mile = cumulative[index];
-    return mile > startMile && mile < endMile;
-  });
+
+  // Binary search slice bounds: O(log N) instead of O(N) full array scan
+  const startIndex = bisectRight(cumulative, startMile);
+  const endIndex = bisectLeft(cumulative, endMile);
+  const middle = startIndex < endIndex ? coordinates.slice(startIndex, endIndex) : [];
+
   return [start, ...middle, end];
+}
+
+function bisectLeft(arr: number[], x: number, low = 0, high = arr.length): number {
+  let l = low;
+  let r = high;
+  while (l < r) {
+    const mid = (l + r) >> 1;
+    if (arr[mid] < x) {
+      l = mid + 1;
+    } else {
+      r = mid;
+    }
+  }
+  return l;
+}
+
+function bisectRight(arr: number[], x: number, low = 0, high = arr.length): number {
+  let l = low;
+  let r = high;
+  while (l < r) {
+    const mid = (l + r) >> 1;
+    if (x < arr[mid]) {
+      r = mid;
+    } else {
+      l = mid + 1;
+    }
+  }
+  return l;
 }
 
 function pointAt(
@@ -44,14 +74,11 @@ function pointAt(
   if (mile <= 0) return coordinates[0];
   const total = cumulative[cumulative.length - 1];
   if (mile >= total) return coordinates[coordinates.length - 1];
-  for (let index = 1; index < cumulative.length; index += 1) {
-    if (cumulative[index] >= mile) {
-      const span = cumulative[index] - cumulative[index - 1];
-      const fraction = span <= 0 ? 0 : (mile - cumulative[index - 1]) / span;
-      const [lon1, lat1] = coordinates[index - 1];
-      const [lon2, lat2] = coordinates[index];
-      return [lon1 + (lon2 - lon1) * fraction, lat1 + (lat2 - lat1) * fraction];
-    }
-  }
-  return coordinates[coordinates.length - 1];
+
+  const index = bisectLeft(cumulative, mile, 1, cumulative.length);
+  const span = cumulative[index] - cumulative[index - 1];
+  const fraction = span <= 0 ? 0 : (mile - cumulative[index - 1]) / span;
+  const [lon1, lat1] = coordinates[index - 1];
+  const [lon2, lat2] = coordinates[index];
+  return [lon1 + (lon2 - lon1) * fraction, lat1 + (lat2 - lat1) * fraction];
 }

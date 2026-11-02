@@ -21,3 +21,4 @@ frontend/.vite/
 *.log
 .idea/
 .vscode/
+note.md

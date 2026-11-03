@@ -1,6 +1,15 @@
 import type { GeocodeHit, PlanRequest, PlanResponse } from "../types";
 
-const base = import.meta.env.VITE_API_URL ?? "";
+const base = (import.meta.env.VITE_API_URL ?? "").trim();
+
+function resolveUrl(path: string): string {
+  if (!base) return path;
+  const cleanBase = base.replace(/\/+$/, "");
+  if (cleanBase.endsWith("/api") && path.startsWith("/api")) {
+    return cleanBase + path.slice(4);
+  }
+  return `${cleanBase}${path}`;
+}
 
 export class ApiError extends Error {
   status: number;
@@ -32,7 +41,7 @@ export async function geocode(query: string): Promise<GeocodeHit[]> {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(`${base}${path}`, init);
+    response = await fetch(resolveUrl(path), init);
   } catch {
     throw new ApiError(0, "The server could not be reached.");
   }
